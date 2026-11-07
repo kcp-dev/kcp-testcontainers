@@ -1,0 +1,88 @@
+version: "2"
+run:
+  allow-parallel-runners: true
+linters:
+  default: none
+  enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - containedctx
+    - copyloopvar
+    - dupword
+    - durationcheck
+    - errcheck
+    - errchkjson
+    - fatcontext
+    - gocritic
+    - godot
+    - goprintffuncname
+    - gosec
+    - govet
+    - importas
+    - ineffassign
+    - intrange
+    - misspell
+    - nilerr
+    - noctx
+    - nolintlint
+    - nosprintfhostport
+    - paralleltest
+    - prealloc
+    - revive
+    - staticcheck
+    - testifylint
+    - unconvert
+    - unused
+    - usestdlibvars
+    - whitespace
+  settings:
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - experimental
+        - performance
+    misspell:
+      ignore-rules:
+        - creater
+    nolintlint:
+      require-specific: true
+      allow-unused: false
+    paralleltest:
+      check-cleanup: true
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - staticcheck
+        text: QF1008 # "could remove embedded field" often impedes readability and clarity
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  enable:
+    - gci
+    - gofmt
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(k8s.io)
+        - prefix(github.com/kcp-dev)
+        - prefix(github.com/kcp-dev/kcp)
+        - blank
+        - dot
+      custom-order: true
+  exclusions:
+    generated: disable
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
