@@ -19,6 +19,8 @@ package kcptc
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/url"
 	"strings"
 	"time"
 
@@ -47,14 +49,15 @@ type Instance struct {
 	ShardA     testcontainers.Container
 	ShardB     testcontainers.Container
 
-	sharded *sharded
+	base       *rest.Config
+	shardAdmin keyPair
 }
 
 // Run starts a private sharded kcp instance.
 func Run(ctx context.Context, opts Options) (*Instance, error) { //nolint:gocritic // Options by value mirrors testcontainers' request API
 	s, err := newSharded(&opts)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("creating instance: %w", err)
 	}
 	if err := s.start(ctx); err != nil {
 		return nil, fmt.Errorf("starting instance: %w", err)
@@ -64,19 +67,22 @@ func Run(ctx context.Context, opts Options) (*Instance, error) { //nolint:gocrit
 		FrontProxy: s.frontProxy,
 		ShardA:     s.shardA,
 		ShardB:     s.shardB,
-		sharded:    s,
+		base:       s.base,
+		shardAdmin: s.shardAdmin,
 	}, nil
 }
 
 // Config returns an admin rest.Config for the root workspace through the front-proxy.
 func (in *Instance) Config() *rest.Config {
-	return in.sharded.restConfig(ShardA)
+	return in.RESTConfig(ShardA)
 }
 
 // RESTConfig returns an admin rest.Config for the workspace at path
 // through the front-proxy.
 func (in *Instance) RESTConfig(path string) *rest.Config {
-	return in.sharded.restConfig(path)
+	cfg := rest.CopyConfig(in.base)
+	cfg.Host = in.base.Host + "/clusters/" + path
+	return cfg
 }
 
 // defaultScheme returns the Kubernetes scheme extended with kcp's
@@ -115,18 +121,30 @@ func (in *Instance) ShardNames() []string {
 // ShardConfig returns a system:masters rest.Config talking to shard name
 // directly, bypassing the front-proxy.
 func (in *Instance) ShardConfig(ctx context.Context, name string) (*rest.Config, error) {
-	return in.sharded.shardConfig(ctx, name)
+	container, port, err := in.component(name)
+	if err != nil {
+		return nil, err
+	}
+	return in.externalConfig(ctx, container, name, port, in.shardAdmin)
 }
 
 // ExternalURL rewrites an in-network URL, e.g. a virtual workspace URL
 // https://shard-b:6444/services/..., to the host-mapped endpoint.
 func (in *Instance) ExternalURL(ctx context.Context, inNetwork string) (string, error) {
-	return in.sharded.externalURL(ctx, inNetwork)
-}
-
-// Terminate tears down all containers and the network.
-func (in *Instance) Terminate(ctx context.Context, opts ...testcontainers.TerminateOption) error {
-	return in.sharded.terminate(ctx, opts...)
+	u, err := url.Parse(inNetwork)
+	if err != nil {
+		return "", fmt.Errorf("parsing URL %q: %w", inNetwork, err)
+	}
+	container, port, err := in.component(u.Hostname())
+	if err != nil {
+		return "", err
+	}
+	address, err := mappedAddress(ctx, container, port)
+	if err != nil {
+		return "", fmt.Errorf("resolving %s address: %w", u.Hostname(), err)
+	}
+	u.Host = address
+	return u.String(), nil
 }
 
 // CreateWorkspace creates the workspace at path, including missing parents.
@@ -192,4 +210,47 @@ func (in *Instance) createChildWorkspace(ctx context.Context, parent logicalclus
 	// TODO(ntnn): wait until lc is accessible through front-proxy
 
 	return ws.Name, nil
+}
+
+func (in *Instance) externalConfig(ctx context.Context, container testcontainers.Container, alias, port string, clientCert keyPair) (*rest.Config, error) {
+	address, err := mappedAddress(ctx, container, port)
+	if err != nil {
+		return nil, fmt.Errorf("resolving %s address: %w", alias, err)
+	}
+
+	cfg := rest.CopyConfig(in.base)
+	cfg.Host = "https://" + address
+	cfg.ServerName = alias
+	cfg.CertData = clientCert.cert
+	cfg.KeyData = clientCert.key
+	return cfg, nil
+}
+
+func (in *Instance) component(alias string) (testcontainers.Container, string, error) {
+	switch alias {
+	case AliasCache:
+		return in.Cache, portCache, nil
+	case AliasFrontProxy:
+		return in.FrontProxy, portFrontProxy, nil
+	case ShardA:
+		return in.ShardA, portShard, nil
+	case ShardB:
+		return in.ShardB, portShard, nil
+	default:
+		return nil, "", fmt.Errorf("no component for alias %q", alias)
+	}
+}
+
+func mappedAddress(ctx context.Context, container testcontainers.Container, port string) (string, error) {
+	host, err := container.Host(ctx)
+	if err != nil {
+		return "", fmt.Errorf("resolving container host: %w", err)
+	}
+
+	mapped, err := container.MappedPort(ctx, port+"/tcp")
+	if err != nil {
+		return "", fmt.Errorf("resolving mapped port %s: %w", port, err)
+	}
+
+	return net.JoinHostPort(host, mapped.Port()), nil
 }

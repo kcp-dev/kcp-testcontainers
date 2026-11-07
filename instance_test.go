@@ -21,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"k8s.io/client-go/rest"
@@ -32,12 +33,13 @@ func TestInstance_RESTConfig(t *testing.T) {
 	t.Parallel()
 
 	in := &Instance{
-		sharded: &sharded{
-			base: &rest.Config{
-				Host: "https://localhost:12345",
-				TLSClientConfig: rest.TLSClientConfig{
-					ServerName: AliasFrontProxy,
-				},
+		base: &rest.Config{
+			Host: "https://localhost:12345",
+			TLSClientConfig: rest.TLSClientConfig{
+				ServerName: AliasFrontProxy,
+				CAData:     []byte("ca"),
+				CertData:   []byte("cert"),
+				KeyData:    []byte("key"),
 			},
 		},
 	}
@@ -45,7 +47,9 @@ func TestInstance_RESTConfig(t *testing.T) {
 	cfg := in.RESTConfig("root:my:workspace")
 	assert.Equal(t, "https://localhost:12345/clusters/root:my:workspace", cfg.Host)
 	assert.Equal(t, AliasFrontProxy, cfg.ServerName, "TLS settings must be carried over")
-	assert.Equal(t, "https://localhost:12345", in.sharded.base.Host, "base must not be mutated")
+	assert.Equal(t, in.base.TLSClientConfig, cfg.TLSClientConfig, "client credentials must be carried over")
+	cfg.Host = "https://changed.example"
+	assert.Equal(t, "https://localhost:12345", in.base.Host, "base must not be mutated")
 
 	assert.Equal(t, "https://localhost:12345/clusters/root", in.Config().Host)
 }
@@ -54,10 +58,8 @@ func TestInstance_Client(t *testing.T) {
 	t.Parallel()
 
 	in := &Instance{
-		sharded: &sharded{
-			base: &rest.Config{
-				Host: "https://localhost:12345",
-			},
+		base: &rest.Config{
+			Host: "https://localhost:12345",
 		},
 	}
 
@@ -74,6 +76,61 @@ func TestInstance_ShardNames(t *testing.T) {
 	assert.Equal(t, []string{ShardA, ShardB}, (&Instance{}).ShardNames())
 }
 
+func TestInstance_ShardConfig(t *testing.T) {
+	t.Parallel()
+
+	_, err := (&Instance{}).ShardConfig(t.Context(), "unknown")
+	require.Error(t, err, "unknown shards must fail before contacting Docker")
+}
+
+func TestInstance_ExternalURL(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"malformed URL":     "https://%invalid",
+		"unknown component": "https://unknown:6444/services",
+		"missing host":      "/services",
+	}
+	for title, input := range cases {
+		t.Run(title, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := (&Instance{}).ExternalURL(t.Context(), input)
+			require.Error(t, err, "invalid URLs must fail before contacting Docker")
+		})
+	}
+}
+
+func TestInstance_component(t *testing.T) {
+	t.Parallel()
+
+	in := &Instance{
+		Cache:      &testcontainers.DockerContainer{ID: AliasCache},
+		FrontProxy: &testcontainers.DockerContainer{ID: AliasFrontProxy},
+		ShardA:     &testcontainers.DockerContainer{ID: ShardA},
+		ShardB:     &testcontainers.DockerContainer{ID: ShardB},
+	}
+	cases := map[string]struct {
+		container testcontainers.Container
+		port      string
+	}{
+		AliasCache:      {in.Cache, portCache},
+		AliasFrontProxy: {in.FrontProxy, portFrontProxy},
+		ShardA:          {in.ShardA, portShard},
+		ShardB:          {in.ShardB, portShard},
+	}
+	for alias, cas := range cases {
+		t.Run(alias, func(t *testing.T) {
+			t.Parallel()
+
+			container, port, err := in.component(alias)
+			require.NoError(t, err)
+			assert.Same(t, cas.container, container)
+			assert.Equal(t, cas.port, port)
+		})
+	}
+}
+
 func TestInstance_CreateWorkspace_invalidPath(t *testing.T) {
 	t.Parallel()
 
@@ -88,9 +145,7 @@ func TestInstance_CreateWorkspace_invalidPath(t *testing.T) {
 		t.Run(title, func(t *testing.T) {
 			t.Parallel()
 
-			in := &Instance{
-				sharded: &sharded{},
-			}
+			in := &Instance{}
 			_, err := in.CreateWorkspace(t.Context(), path)
 			require.Error(t, err, "path %q must be rejected before any API call", path)
 		})

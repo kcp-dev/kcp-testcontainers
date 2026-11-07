@@ -22,8 +22,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"net"
-	"net/url"
+	"io"
 	"time"
 
 	"github.com/testcontainers/testcontainers-go"
@@ -68,10 +67,18 @@ const (
 
 // Paths inside the containers.
 const (
+	// rootDirectory is the working directory of the kcp process in the container.
 	rootDirectory = "/.kcp"
-	pkiDir        = "/etc/kcp-pki"
 
+	// pkiDir is the root dir for all x509-related files in the container.
+	pkiDir = "/.kcp-pki"
 	caPath = pkiDir + "/ca.crt"
+
+	// The admin credentials for other processes to read when sharing an instance.
+	adminCertPath      = pkiDir + "/admin.crt"
+	adminKeyPath       = pkiDir + "/admin.key"
+	shardAdminCertPath = pkiDir + "/shard-admin.crt"
+	shardAdminKeyPath  = pkiDir + "/shard-admin.key"
 
 	serviceAccountCertPath = pkiDir + "/service-account.crt"
 	serviceAccountKeyPath  = pkiDir + "/service-account.key"
@@ -112,7 +119,6 @@ type sharded struct {
 	shardA     testcontainers.Container
 	shardB     testcontainers.Container
 
-	// base is the front-proxy rest.Config without a /clusters/ path.
 	base *rest.Config
 }
 
@@ -176,19 +182,21 @@ func (s *sharded) start(ctx context.Context) error {
 		return err
 	}
 
-	s.base, err = s.externalConfig(ctx, s.frontProxy, AliasFrontProxy, portFrontProxy, s.admin)
-	if err != nil {
+	if err := s.loadCredentials(ctx); err != nil {
 		return err
 	}
+
+	cfg := rest.CopyConfig(s.base)
+	cfg.Host += "/clusters/" + ShardA
 
 	readyCtx, cancel := context.WithTimeout(ctx, s.opts.StartupTimeout)
 	defer cancel()
 
-	if err := s.waitForShards(readyCtx); err != nil {
+	if err := waitForShards(readyCtx, cfg); err != nil {
 		return fmt.Errorf("waiting for shard to be registered: %w", err)
 	}
 
-	if err := kcptestingserver.WaitForReady(readyCtx, s.restConfig(ShardA)); err != nil {
+	if err := kcptestingserver.WaitForReady(readyCtx, cfg); err != nil {
 		return fmt.Errorf("waiting for instance to be ready: %w", err)
 	}
 
@@ -222,8 +230,8 @@ func (s *sharded) startContainer(ctx context.Context, alias string, build func()
 	return container, nil
 }
 
-func (s *sharded) waitForShards(ctx context.Context) error {
-	cl, err := client.New(s.restConfig(ShardA), client.Options{
+func waitForShards(ctx context.Context, cfg *rest.Config) error {
+	cl, err := client.New(cfg, client.Options{
 		Scheme: defaultScheme(),
 	})
 	if err != nil {
@@ -245,89 +253,88 @@ func (s *sharded) waitForShards(ctx context.Context) error {
 	return nil
 }
 
-// restConfig returns the admin rest.Config for the workspace at path
-// through the front-proxy.
-func (s *sharded) restConfig(path string) *rest.Config {
-	cfg := rest.CopyConfig(s.base)
-	cfg.Host = s.base.Host + "/clusters/" + path
-	return cfg
-}
-
-// shardConfig returns a system:masters rest.Config talking to shard name directly.
-func (s *sharded) shardConfig(ctx context.Context, name string) (*rest.Config, error) {
-	container, port, err := s.component(name)
+func (s *sharded) loadCredentials(ctx context.Context) error {
+	credentials, err := readCredentials(ctx, s.frontProxy.CopyFileFromContainer)
 	if err != nil {
-		return nil, err
-	}
-	return s.externalConfig(ctx, container, name, port, s.shardAdmin)
-}
-
-// externalURL rewrites an in-network URL to the host-mapped endpoint.
-func (s *sharded) externalURL(ctx context.Context, inNetwork string) (string, error) {
-	u, err := url.Parse(inNetwork)
-	if err != nil {
-		return "", fmt.Errorf("parsing URL %q: %w", inNetwork, err)
-	}
-	container, port, err := s.component(u.Hostname())
-	if err != nil {
-		return "", err
-	}
-	address, err := mappedAddress(ctx, container, port)
-	if err != nil {
-		return "", fmt.Errorf("resolving %s address: %w", u.Hostname(), err)
-	}
-	u.Host = address
-	return u.String(), nil
-}
-
-// externalConfig builds a rest.Config for container through its mapped port.
-// ServerName pins TLS verification to the alias in the serving certificate.
-func (s *sharded) externalConfig(ctx context.Context, container testcontainers.Container, alias, port string, clientCert keyPair) (*rest.Config, error) {
-	address, err := mappedAddress(ctx, container, port)
-	if err != nil {
-		return nil, fmt.Errorf("resolving %s address: %w", alias, err)
+		return err
 	}
 
-	return &rest.Config{
+	address, err := mappedAddress(ctx, s.frontProxy, portFrontProxy)
+	if err != nil {
+		return fmt.Errorf("resolving front-proxy address: %w", err)
+	}
+
+	s.base = &rest.Config{
 		Host: "https://" + address,
 		TLSClientConfig: rest.TLSClientConfig{
-			ServerName: alias,
-			CAData:     s.pki.caPEM,
-			CertData:   clientCert.cert,
-			KeyData:    clientCert.key,
+			ServerName: AliasFrontProxy,
+			CAData:     credentials.ca,
+			CertData:   credentials.admin.cert,
+			KeyData:    credentials.admin.key,
 		},
-	}, nil
+	}
+	s.admin = credentials.admin
+	s.shardAdmin = credentials.shardAdmin
+	return nil
 }
 
-// component returns the container and in-network port behind alias.
-func (s *sharded) component(alias string) (testcontainers.Container, string, error) {
-	switch alias {
-	case AliasCache:
-		return s.cache, portCache, nil
-	case AliasFrontProxy:
-		return s.frontProxy, portFrontProxy, nil
-	case ShardA:
-		return s.shardA, portShard, nil
-	case ShardB:
-		return s.shardB, portShard, nil
-	default:
-		return nil, "", fmt.Errorf("no component for alias %q", alias)
-	}
+type clientCredentials struct {
+	ca         []byte
+	admin      keyPair
+	shardAdmin keyPair
 }
 
-// mappedAddress returns the host:port container exposes port on.
-func mappedAddress(ctx context.Context, container testcontainers.Container, port string) (string, error) {
-	host, err := container.Host(ctx)
+func readCredentials(ctx context.Context, copyFile func(context.Context, string) (io.ReadCloser, error)) (clientCredentials, error) {
+	caFile, err := readCredential(ctx, copyFile, caPath)
 	if err != nil {
-		return "", fmt.Errorf("resolving container host: %w", err)
+		return clientCredentials{}, err
 	}
 
-	mapped, err := container.MappedPort(ctx, port+"/tcp")
+	adminCertFile, err := readCredential(ctx, copyFile, adminCertPath)
 	if err != nil {
-		return "", fmt.Errorf("resolving mapped port %s: %w", port, err)
+		return clientCredentials{}, err
 	}
 
-	return net.JoinHostPort(host, mapped.Port()), nil
+	adminKeyFile, err := readCredential(ctx, copyFile, adminKeyPath)
+	if err != nil {
+		return clientCredentials{}, err
+	}
+
+	shardAdminCertFile, err := readCredential(ctx, copyFile, shardAdminCertPath)
+	if err != nil {
+		return clientCredentials{}, err
+	}
+
+	shardAdminKeyFile, err := readCredential(ctx, copyFile, shardAdminKeyPath)
+	if err != nil {
+		return clientCredentials{}, err
+	}
+
+	credentials := clientCredentials{
+		ca: caFile,
+		admin: keyPair{
+			cert: adminCertFile,
+			key:  adminKeyFile,
+		},
+		shardAdmin: keyPair{
+			cert: shardAdminCertFile,
+			key:  shardAdminKeyFile,
+		},
+	}
+
+	return credentials, nil
+}
+
+func readCredential(ctx context.Context, copyFile func(context.Context, string) (io.ReadCloser, error), path string) ([]byte, error) {
+	reader, err := copyFile(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("copying credential %s: %w", path, err)
+	}
+	content, readErr := io.ReadAll(reader)
+	if err := errors.Join(readErr, reader.Close()); err != nil {
+		return nil, fmt.Errorf("reading credential %s: %w", path, err)
+	}
+	return content, nil
 }
 
 // waitReadyz retunrs the testcontainer wait strategy probing /readyz.
@@ -409,6 +416,10 @@ func (s *sharded) frontProxyRequest() (*testcontainers.GenericContainerRequest, 
 				file(servingKeyPath, serving.key),
 				file(requestHeaderClientCertPath, requestHeaderClient.cert),
 				file(requestHeaderClientKeyPath, requestHeaderClient.key),
+				file(adminCertPath, s.admin.cert),
+				file(adminKeyPath, s.admin.key),
+				file(shardAdminCertPath, s.shardAdmin.cert),
+				file(shardAdminKeyPath, s.shardAdmin.key),
 				file(rootKubeconfigPath, rootKubeconfig),
 				file(shardsKubeconfigPath, shardsKubeconfig),
 				file(mappingPath, []byte(mapping)),

@@ -17,7 +17,14 @@ limitations under the License.
 package kcptc
 
 import (
+	"bytes"
+	"context"
+	"io"
+	"io/fs"
+	"maps"
+	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -97,8 +104,146 @@ func TestSharded_requests(t *testing.T) {
 		assert.Subset(t, filePaths(req), []string{
 			mappingPath, rootKubeconfigPath, shardsKubeconfigPath,
 			requestHeaderClientCertPath, requestHeaderClientKeyPath,
+			adminCertPath, adminKeyPath, shardAdminCertPath, shardAdminKeyPath,
 		})
 	})
+}
+
+func TestReadCredentials(t *testing.T) {
+	t.Parallel()
+
+	s, err := newSharded(&Options{})
+	require.NoError(t, err)
+	req, err := s.frontProxyRequest()
+	require.NoError(t, err)
+	stored := fileContents(t, req)
+
+	cases := map[string]string{
+		"loads stored credentials":                "",
+		"reports missing CA":                      caPath,
+		"reports missing admin certificate":       adminCertPath,
+		"reports missing admin key":               adminKeyPath,
+		"reports missing shard admin certificate": shardAdminCertPath,
+		"reports missing shard admin key":         shardAdminKeyPath,
+	}
+	for title, missing := range cases {
+		t.Run(title, func(t *testing.T) {
+			t.Parallel()
+
+			files := maps.Clone(stored)
+			delete(files, missing)
+			copyFile := func(_ context.Context, path string) (io.ReadCloser, error) {
+				content, ok := files[path]
+				if !ok {
+					return nil, fs.ErrNotExist
+				}
+				return io.NopCloser(bytes.NewReader(content)), nil
+			}
+
+			credentials, err := readCredentials(t.Context(), copyFile)
+			if missing != "" {
+				require.ErrorIs(t, err, fs.ErrNotExist)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, s.pki.caPEM, credentials.ca)
+			assert.Equal(t, s.admin.cert, credentials.admin.cert)
+			assert.Equal(t, s.shardAdmin.cert, credentials.shardAdmin.cert)
+			assert.True(t, bytes.Equal(s.admin.key, credentials.admin.key), "admin key must come from the container")
+			assert.True(t, bytes.Equal(s.shardAdmin.key, credentials.shardAdmin.key), "shard admin key must come from the container")
+		})
+	}
+}
+
+func TestReadCredential(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		reader   io.Reader
+		want     string
+		copyErr  error
+		readErr  error
+		closeErr error
+	}{
+		"reads credential": {
+			reader: strings.NewReader("credential"),
+			want:   "credential",
+		},
+		"reports copy failure": {
+			copyErr: fs.ErrNotExist,
+		},
+		"reports read failure": {
+			reader:  iotest.ErrReader(io.ErrUnexpectedEOF),
+			readErr: io.ErrUnexpectedEOF,
+		},
+		"reports close failure": {
+			reader:   strings.NewReader("credential"),
+			closeErr: io.ErrClosedPipe,
+		},
+		"preserves read and close failures": {
+			reader:   iotest.ErrReader(io.ErrUnexpectedEOF),
+			readErr:  io.ErrUnexpectedEOF,
+			closeErr: io.ErrClosedPipe,
+		},
+	}
+	for title, cas := range cases {
+		t.Run(title, func(t *testing.T) {
+			t.Parallel()
+
+			closed := false
+			copyFile := func(ctx context.Context, path string) (io.ReadCloser, error) {
+				assert.Equal(t, t.Context(), ctx, "copy must use caller context")
+				assert.Equal(t, adminKeyPath, path)
+				if cas.copyErr != nil {
+					return nil, cas.copyErr
+				}
+				return &credentialReadCloser{
+					Reader: cas.reader,
+					close: func() error {
+						closed = true
+						return cas.closeErr
+					},
+				}, nil
+			}
+
+			content, err := readCredential(t.Context(), copyFile, adminKeyPath)
+			if cas.copyErr != nil || cas.readErr != nil || cas.closeErr != nil {
+				require.Error(t, err)
+				assert.Nil(t, content, "failed reads must not expose partial credentials")
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, cas.want, string(content))
+			}
+			for _, expected := range []error{cas.copyErr, cas.readErr, cas.closeErr} {
+				if expected != nil {
+					require.ErrorIs(t, err, expected)
+				}
+			}
+			assert.Equal(t, cas.copyErr == nil, closed, "every opened credential reader must be closed")
+		})
+	}
+}
+
+type credentialReadCloser struct {
+	io.Reader
+	close func() error
+}
+
+func (reader *credentialReadCloser) Close() error {
+	return reader.close()
+}
+
+func fileContents(t *testing.T, req *testcontainers.GenericContainerRequest) map[string][]byte {
+	t.Helper()
+
+	files := make(map[string][]byte, len(req.Files))
+	for _, f := range req.Files {
+		require.NotNil(t, f.Reader)
+		content, err := io.ReadAll(f.Reader)
+		require.NoError(t, err)
+		files[f.ContainerFilePath] = content
+	}
+	return files
 }
 
 func filePaths(req *testcontainers.GenericContainerRequest) []string {
