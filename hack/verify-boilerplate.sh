@@ -24,4 +24,5 @@ set -x
 
 "$BOILERPLATE" \
   -boilerplates hack/boilerplate \
-  -exclude .github
+  -exclude .github \
+  -exclude hack/uget.sh
