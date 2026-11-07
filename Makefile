@@ -15,7 +15,7 @@
 export CGO_ENABLED ?= 0
 GO ?= go
 
-default: lint lint-readme verify test
+default: lint lint-readme verify test test-e2e
 
 .PHONY: lint
 lint: install-golangci-lint
@@ -39,7 +39,11 @@ verify:
 
 .PHONY: test
 test:
-	$(GO) test ./...
+	$(GO) test $$($(GO) list ./... | grep -v /tests/e2e)
+
+.PHONY: test-e2e
+test-e2e:
+	$(GO) test ./tests/e2e/...
 
 export UGET_DIRECTORY = hack/tools
 export UGET_CHECKSUMS = hack/tools.checksums
