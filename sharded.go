@@ -520,6 +520,11 @@ func (s *sharded) frontProxyRequest() (*testcontainers.GenericContainerRequest, 
 		return nil, err
 	}
 
+	admin, err := s.pki.clientCert("kcp-admin", groupKcpAdmin)
+	if err != nil {
+		return nil, err
+	}
+
 	rootKubeconfig, err := kubeconfigBytes(inNetworkURL(ShardA, portShard), s.pki.caPEM, shardAdmin)
 	if err != nil {
 		return nil, err
@@ -557,10 +562,10 @@ func (s *sharded) frontProxyRequest() (*testcontainers.GenericContainerRequest, 
 				file(servingKeyPath, serving.key),
 				file(requestHeaderClientCertPath, requestHeaderClient.cert),
 				file(requestHeaderClientKeyPath, requestHeaderClient.key),
-				file(adminCertPath, s.admin.cert),
-				file(adminKeyPath, s.admin.key),
-				file(shardAdminCertPath, s.shardAdmin.cert),
-				file(shardAdminKeyPath, s.shardAdmin.key),
+				file(adminCertPath, admin.cert),
+				file(adminKeyPath, admin.key),
+				file(shardAdminCertPath, shardAdmin.cert),
+				file(shardAdminKeyPath, shardAdmin.key),
 				file(rootKubeconfigPath, rootKubeconfig),
 				file(shardsKubeconfigPath, shardsKubeconfig),
 				file(mappingPath, []byte(mapping)),

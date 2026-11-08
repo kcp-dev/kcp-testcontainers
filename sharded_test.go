@@ -39,7 +39,6 @@ func TestNewSharded(t *testing.T) {
 
 	assert.Equal(t, DefaultTag, s.opts.Image, "options must be validated")
 	assert.NotNil(t, s.pki)
-	assert.NotEmpty(t, s.admin.cert)
 }
 
 func TestSharded_requests(t *testing.T) {
@@ -147,10 +146,12 @@ func TestReadCredentials(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, s.pki.caPEM, credentials.ca)
-			assert.Equal(t, s.admin.cert, credentials.admin.cert)
-			assert.Equal(t, s.shardAdmin.cert, credentials.shardAdmin.cert)
-			assert.True(t, bytes.Equal(s.admin.key, credentials.admin.key), "admin key must come from the container")
-			assert.True(t, bytes.Equal(s.shardAdmin.key, credentials.shardAdmin.key), "shard admin key must come from the container")
+			assert.Equal(t, stored[adminCertPath], credentials.admin.cert)
+			assert.Equal(t, stored[adminKeyPath], credentials.admin.key)
+			assert.Equal(t, stored[shardAdminCertPath], credentials.shardAdmin.cert)
+			assert.Equal(t, stored[shardAdminKeyPath], credentials.shardAdmin.key)
+			assert.NotEmpty(t, credentials.admin.cert, "front-proxy request must carry the admin certificate")
+			assert.NotEmpty(t, credentials.shardAdmin.cert, "front-proxy request must carry the shard admin certificate")
 		})
 	}
 }
