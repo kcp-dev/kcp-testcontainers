@@ -19,7 +19,7 @@ default: lint lint-readme verify test test-e2e
 
 .PHONY: lint
 lint: install-golangci-lint
-	$(GOLANGCI_LINT) run ./...
+	$(GOLANGCI_LINT) run $(GOLANGCI_LINT_FLAGS) ./...
 
 .PHONY: lint-fix
 lint-fix: override GOLANGCI_LINT_FLAGS := $(GOLANGCI_LINT_FLAGS) --fix
