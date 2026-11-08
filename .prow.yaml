@@ -82,6 +82,9 @@ presubmits:
             requests:
               memory: 1Gi
               cpu: 1
+          # docker-in-docker needs privileged mode
+          securityContext:
+            privileged: true
 
   - name: pull-testcontainers-test-e2e-0.32
     always_run: true
@@ -102,6 +105,9 @@ presubmits:
             requests:
               memory: 1Gi
               cpu: 1
+          # docker-in-docker needs privileged mode
+          securityContext:
+            privileged: true
 
   - name: pull-testcontainers-test-e2e-0.31
     always_run: true
@@ -122,6 +128,9 @@ presubmits:
             requests:
               memory: 1Gi
               cpu: 1
+          # docker-in-docker needs privileged mode
+          securityContext:
+            privileged: true
 
   - name: pull-testcontainers-test-e2e-0.30
     always_run: true
@@ -142,3 +151,6 @@ presubmits:
             requests:
               memory: 1Gi
               cpu: 1
+          # docker-in-docker needs privileged mode
+          securityContext:
+            privileged: true
