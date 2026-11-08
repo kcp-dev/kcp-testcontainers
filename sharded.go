@@ -23,12 +23,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"time"
 
+	mobycontainer "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/testcontainers/testcontainers-go"
 	tcnetwork "github.com/testcontainers/testcontainers-go/network"
 	tcwait "github.com/testcontainers/testcontainers-go/wait"
-	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apiserver/pkg/authentication/user"
@@ -40,6 +43,10 @@ import (
 
 // shardPollInterval is how often the Shard objects are listed during startup.
 const shardPollInterval = time.Second
+
+// containerPollInterval is how often the network is listed
+// for containers started by another process.
+const containerPollInterval = time.Second
 
 // Network aliases of the components.
 const (
@@ -113,7 +120,8 @@ type sharded struct {
 	// shardAdmin is the system:masters client certificate for direct shard access.
 	shardAdmin keyPair
 
-	network    *testcontainers.DockerNetwork
+	// network is the name of the network the cache-server was created with.
+	network    string
 	cache      testcontainers.Container
 	frontProxy testcontainers.Container
 	shardA     testcontainers.Container
@@ -133,51 +141,50 @@ func newSharded(opts *Options) (*sharded, error) {
 		return nil, err
 	}
 
-	admin, err := p.clientCert("kcp-admin", groupKcpAdmin)
-	if err != nil {
-		return nil, err
-	}
-
-	shardAdmin, err := p.clientCert("shard-admin", groupSystemMasters)
-	if err != nil {
-		return nil, err
-	}
-
 	return &sharded{
-		pki:        p,
-		opts:       opts,
-		admin:      admin,
-		shardAdmin: shardAdmin,
+		pki:  p,
+		opts: opts,
 	}, nil
 }
 
 func (s *sharded) start(ctx context.Context) error {
 	var err error
-	s.network, err = tcnetwork.New(ctx)
-	if err != nil {
-		return fmt.Errorf("creating network: %w", err)
-	}
 
-	s.cache, err = s.startContainer(ctx, AliasCache, s.cacheRequest)
-	if err != nil {
-		return err
-	}
+	// To allow multiple processes to start the same instance the
+	// cache-server is created first with [tcnetwork.WithNewNetwork],
+	// which creates a new network with a random name, and
+	// [testcontainers.WithReuseByName], which leads to a container with
+	// the same name only being created once.
+	//
+	// When multiple processes try to create this container
+	// testcontainers only allows one of them to do so.
+	// Afterwards the processes check which process owns the
+	// cache-server and should create the other containers since they
+	// need to use the same pki.
+	//
+	// The other processes wait until the front-proxy is ready and then
+	// loading the client information from the front-proxy.
 
-	s.shardA, err = s.startContainer(ctx, ShardA, func() (*testcontainers.GenericContainerRequest, error) {
-		return s.shardRequest(ShardA)
-	})
-	if err != nil {
-		return err
-	}
-
-	s.shardB, err = s.startContainer(ctx, ShardB, func() (*testcontainers.GenericContainerRequest, error) {
-		return s.shardRequest(ShardB)
-	})
+	s.cache, err = s.startContainer(ctx, AliasCache, s.cacheRequest, tcnetwork.WithNewNetwork(ctx, []string{AliasCache}))
 	if err != nil {
 		return err
 	}
 
-	s.frontProxy, err = s.startContainer(ctx, AliasFrontProxy, s.frontProxyRequest)
+	s.network, err = networkWithAlias(ctx, s.cache, AliasCache)
+	if err != nil {
+		return err
+	}
+
+	owner, err := s.ownsInstance(ctx)
+	if err != nil {
+		return err
+	}
+
+	if owner {
+		err = s.startComponents(ctx)
+	} else {
+		err = s.joinComponents(ctx)
+	}
 	if err != nil {
 		return err
 	}
@@ -203,16 +210,145 @@ func (s *sharded) start(ctx context.Context) error {
 	return nil
 }
 
-// startContainer builds the request for alias, attaches it to the network, applies the customizers of alias and starts it.
-func (s *sharded) startContainer(ctx context.Context, alias string, build func() (*testcontainers.GenericContainerRequest, error)) (testcontainers.Container, error) {
+// ownsInstance reports whether the cache-server was created by this process.
+func (s *sharded) ownsInstance(ctx context.Context) (bool, error) {
+	// When sharded is created it gets a pki generated and the
+	// kcp instance is configured with that pki.
+	// When multiple processes start the same instance the processes
+	// decide ownership based on the CA in the cache-server.
+	ca, err := readCredential(ctx, s.cache.CopyFileFromContainer, caPath)
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(ca, s.pki.caPEM), nil
+}
+
+// startComponents starts the shards and the front-proxy on the cache-server's network.
+func (s *sharded) startComponents(ctx context.Context) error {
+	var err error
+	s.shardA, err = s.startContainer(ctx, ShardA, func() (*testcontainers.GenericContainerRequest, error) {
+		return s.shardRequest(ShardA)
+	}, s.withNetwork(ShardA))
+	if err != nil {
+		return err
+	}
+
+	s.shardB, err = s.startContainer(ctx, ShardB, func() (*testcontainers.GenericContainerRequest, error) {
+		return s.shardRequest(ShardB)
+	}, s.withNetwork(ShardB))
+	if err != nil {
+		return err
+	}
+
+	s.frontProxy, err = s.startContainer(ctx, AliasFrontProxy, s.frontProxyRequest, s.withNetwork(AliasFrontProxy))
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// joinComponents waits for the process owning the instance to start
+// the shards and the front-proxy and for the front-proxy to become ready.
+func (s *sharded) joinComponents(ctx context.Context) error {
+	joinCtx, cancel := context.WithTimeout(ctx, s.opts.StartupTimeout)
+	defer cancel()
+
+	provider, err := testcontainers.NewDockerProvider()
+	if err != nil {
+		return fmt.Errorf("creating docker provider: %w", err)
+	}
+	defer provider.Close()
+
+	s.shardA, err = containerWithAlias(joinCtx, provider, s.network, ShardA)
+	if err != nil {
+		return err
+	}
+
+	s.shardB, err = containerWithAlias(joinCtx, provider, s.network, ShardB)
+	if err != nil {
+		return err
+	}
+
+	s.frontProxy, err = containerWithAlias(joinCtx, provider, s.network, AliasFrontProxy)
+	if err != nil {
+		return err
+	}
+
+	if err := s.waitReadyz(portFrontProxy).WaitUntilReady(joinCtx, s.frontProxy); err != nil {
+		return fmt.Errorf("waiting for %s to be ready: %w", AliasFrontProxy, err)
+	}
+
+	return nil
+}
+
+// withNetwork attaches a container as alias to the cache-server's network.
+func (s *sharded) withNetwork(alias string) testcontainers.CustomizeRequestOption {
+	return tcnetwork.WithNetworkName([]string{alias}, s.network)
+}
+
+// networkWithAlias returns the name of the network on which container is reachable as alias.
+func networkWithAlias(ctx context.Context, container testcontainers.Container, alias string) (string, error) {
+	aliases, err := container.NetworkAliases(ctx)
+	if err != nil {
+		return "", fmt.Errorf("inspecting network aliases of %s: %w", alias, err)
+	}
+	for network, names := range aliases {
+		if slices.Contains(names, alias) {
+			return network, nil
+		}
+	}
+	return "", fmt.Errorf("no network has alias %s", alias)
+}
+
+// containerWithAlias polls network until a running container is reachable as alias.
+func containerWithAlias(ctx context.Context, provider *testcontainers.DockerProvider, network, alias string) (testcontainers.Container, error) {
+	var found mobycontainer.Summary
+	if err := wait.PollUntilContextCancel(ctx, containerPollInterval, true,
+		func(ctx context.Context) (bool, error) {
+			list, err := provider.Client().ContainerList(ctx, client.ContainerListOptions{
+				Filters: make(client.Filters).Add("network", network),
+			})
+			if err != nil {
+				return false, fmt.Errorf("listing containers on network %s: %w", network, err)
+			}
+			for i := range list.Items {
+				// The list API omits endpoint aliases, only inspect reports them.
+				inspect, err := provider.Client().ContainerInspect(ctx, list.Items[i].ID, client.ContainerInspectOptions{})
+				if err != nil {
+					return false, fmt.Errorf("inspecting container %s: %w", list.Items[i].ID, err)
+				}
+				if inspect.Container.NetworkSettings == nil {
+					continue
+				}
+				endpoint := inspect.Container.NetworkSettings.Networks[network]
+				if endpoint != nil && slices.Contains(endpoint.Aliases, alias) {
+					found = list.Items[i]
+					return true, nil
+				}
+			}
+			return false, nil
+		},
+	); err != nil {
+		return nil, fmt.Errorf("waiting for %s on network %s: %w", alias, network, err)
+	}
+
+	ctr, err := provider.ContainerFromType(ctx, found)
+	if err != nil {
+		return nil, fmt.Errorf("loading %s: %w", alias, err)
+	}
+	return ctr, nil
+}
+
+// startContainer builds the request for alias, attaches it to a network, applies the customizers of alias and starts it.
+func (s *sharded) startContainer(ctx context.Context, alias string, build func() (*testcontainers.GenericContainerRequest, error), network testcontainers.CustomizeRequestOption) (testcontainers.Container, error) {
 	req, err := build()
 	if err != nil {
 		return nil, err
 	}
 
-	req.Networks = []string{s.network.Name}
-	req.NetworkAliases = map[string][]string{
-		s.network.Name: {alias},
+	if err := network.Customize(req); err != nil {
+		return nil, fmt.Errorf("attaching %s to network: %w", alias, err)
 	}
 	req.Started = true
 	for _, customizer := range s.opts.customizers(alias) {
@@ -231,7 +367,7 @@ func (s *sharded) startContainer(ctx context.Context, alias string, build func()
 }
 
 func waitForShards(ctx context.Context, cfg *rest.Config) error {
-	cl, err := client.New(cfg, client.Options{
+	cl, err := ctrlclient.New(cfg, ctrlclient.Options{
 		Scheme: defaultScheme(),
 	})
 	if err != nil {
@@ -550,6 +686,7 @@ func (s *sharded) cacheRequest() (*testcontainers.GenericContainerRequest, error
 	}
 
 	return &testcontainers.GenericContainerRequest{
+		Reuse: true,
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:      s.opts.Image,
 			Entrypoint: []string{"/cache-server"},
