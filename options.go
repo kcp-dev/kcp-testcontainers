@@ -45,6 +45,10 @@ type Options struct {
 	// Defaults to [DefaultStartupTimeout].
 	StartupTimeout time.Duration
 
+	// FeatureGates that should be enabled in the instance.
+	// Format is <gate>=<bool>, e.g. `CacheAPIs=true`.
+	FeatureGates []string
+
 	// FrontProxy is [testcontainers.ContainerCustomizer] applied to the front-proxy container after settings derived from the other options.
 	FrontProxy []testcontainers.ContainerCustomizer
 	// ShardA is [testcontainers.ContainerCustomizer] applied to the first shard container after settings derived from the other options.

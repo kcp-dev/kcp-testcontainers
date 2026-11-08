@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"time"
 
 	mobycontainer "github.com/moby/moby/api/types/container"
@@ -506,6 +507,13 @@ func inNetworkURL(alias, port string) string {
 	return "https://" + alias + ":" + port
 }
 
+func (s *sharded) featureGateArgs() []string {
+	if len(s.opts.FeatureGates) == 0 {
+		return nil
+	}
+	return []string{"--feature-gates=" + strings.Join(s.opts.FeatureGates, ",")}
+}
+
 // frontProxyRequest builds the kcp-front-proxy container request.
 func (s *sharded) frontProxyRequest() (*testcontainers.GenericContainerRequest, error) {
 	serving, err := s.pki.serverCert(AliasFrontProxy, "localhost")
@@ -545,7 +553,7 @@ func (s *sharded) frontProxyRequest() (*testcontainers.GenericContainerRequest, 
   proxy_client_key: %s
 `, inNetworkURL(ShardA, portShard), caPath, requestHeaderClientCertPath, requestHeaderClientKeyPath)
 
-	return &testcontainers.GenericContainerRequest{
+	req := &testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:      s.opts.Image,
 			Entrypoint: []string{"/kcp-front-proxy"},
@@ -576,7 +584,11 @@ func (s *sharded) frontProxyRequest() (*testcontainers.GenericContainerRequest, 
 			ExposedPorts: []string{portFrontProxy + "/tcp"},
 			WaitingFor:   s.waitReadyz(portFrontProxy),
 		},
-	}, nil
+	}
+
+	req.ContainerRequest.Cmd = append(req.ContainerRequest.Cmd, s.featureGateArgs()...)
+
+	return req, nil
 }
 
 // shardRequest builds the kcp shard container request for alias.
@@ -650,6 +662,7 @@ func (s *sharded) shardRequest(alias string) (*testcontainers.GenericContainerRe
 		"--logical-cluster-admin-kubeconfig=" + logicalClusterAdminKubeconfigPath,
 		"--external-logical-cluster-admin-kubeconfig=" + externalLogicalClusterAdminKubeconfigPath,
 	}
+	cmd = append(cmd, s.featureGateArgs()...)
 
 	files := []testcontainers.ContainerFile{
 		file(caPath, s.pki.caPEM),

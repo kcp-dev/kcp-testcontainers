@@ -247,6 +247,49 @@ func fileContents(t *testing.T, req *testcontainers.GenericContainerRequest) map
 	return files
 }
 
+func TestSharded_featureGateArgs(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		gates []string
+		want  []string
+	}{
+		"no gates omits the flag": {},
+		"single gate": {
+			gates: []string{"WorkspaceMounts=true"},
+			want:  []string{"--feature-gates=WorkspaceMounts=true"},
+		},
+		"multiple gates are comma separated": {
+			gates: []string{"WorkspaceMounts=false", "CacheAPIs=true"},
+			want:  []string{"--feature-gates=WorkspaceMounts=false,CacheAPIs=true"},
+		},
+	}
+	for title, cas := range cases {
+		t.Run(title, func(t *testing.T) {
+			t.Parallel()
+
+			s, err := newSharded(t.Name(), &Options{FeatureGates: cas.gates})
+			require.NoError(t, err)
+
+			assert.Equal(t, cas.want, s.featureGateArgs())
+
+			shard, err := s.shardRequest(ShardA)
+			require.NoError(t, err)
+			frontProxy, err := s.frontProxyRequest()
+			require.NoError(t, err)
+			cache, err := s.cacheRequest()
+			require.NoError(t, err)
+			for _, want := range cas.want {
+				assert.Contains(t, shard.Cmd, want)
+				assert.Contains(t, frontProxy.Cmd, want)
+			}
+			for _, arg := range cache.Cmd {
+				assert.NotContains(t, arg, "--feature-gates", "cache-server has no feature gates")
+			}
+		})
+	}
+}
+
 func filePaths(req *testcontainers.GenericContainerRequest) []string {
 	paths := make([]string, 0, len(req.Files))
 	for _, f := range req.Files {
