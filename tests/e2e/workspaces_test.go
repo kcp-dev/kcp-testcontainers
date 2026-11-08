@@ -26,6 +26,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/util/wait"
 
+	kcpcrypto "github.com/kcp-dev/apimachinery/v2/pkg/util/crypto"
 	corev1alpha1 "github.com/kcp-dev/sdk/apis/core/v1alpha1"
 	tenancyv1alpha1 "github.com/kcp-dev/sdk/apis/tenancy/v1alpha1"
 	kcptesting "github.com/kcp-dev/sdk/testing"
@@ -49,12 +50,20 @@ func TestWorkspacePinnedToShard(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Logf("Check workspace is scheduled on shard %q", kcptc.ShardB)
+	// the expected annotation and shard name
+	shardAnnotation, wantShard := corev1alpha1.LogicalClusterShardAnnotationKey, kcptc.ShardB
+	if framework.Before(0, 32) {
+		// pre 0.32 the shard was documented on a workspace, but under
+		// a different annotation and the shard name was base35'd and
+		// hashed.
+		shardAnnotation, wantShard = "internal.tenancy.kcp.io/shard", kcpcrypto.Base36Sha224.String(kcptc.ShardB)[:8]
+	}
 	require.EventuallyWithT(t, func(c *assert.CollectT) {
 		ws := &tenancyv1alpha1.Workspace{}
 		require.NoError(c, root.Get(t.Context(), client.ObjectKey{Name: "pinned"}, ws))
 		assert.Equal(c,
-			kcptc.ShardB,
-			ws.Annotations[corev1alpha1.LogicalClusterShardAnnotationKey],
+			wantShard,
+			ws.Annotations[shardAnnotation],
 			"workspace must be scheduled to %s", kcptc.ShardB,
 		)
 	}, wait.ForeverTestTimeout, 100*time.Millisecond)
