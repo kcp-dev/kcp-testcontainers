@@ -58,6 +58,43 @@ cl, err := instance.Client("root:my:workspace", client.Options{})
     _ = err
     _ = cfg
     _ = cl
+```
+-->
+
+## Sharing across processes
+
+When running go tests each tested package is run as its own process.
+
+`kcptc.Shared` implements sharing instances across processes by giving
+an instance a name and using testcontainers `SessionID`:
+
+```go ci
+// a shared instance that is reused across processes
+shared, err := kcptc.Shared(ctx, "shared-instance", kcptc.Options{})
+sharedWS, err := shared.CreateWorkspace(ctx, "root:my:workspace")
+sharedCL, err := shared.Client("root:my:workspace", client.Options{})
+```
+
+<!--
+```go ci
+_ = shared
+_ = sharedWS
+_ = sharedCL
 }
 ```
 -->
+
+To prevent drift for the configurations a good option is to have
+a `framework` package with functions that call `Shared`:
+
+```go ci
+func Kcp(ctx context.Context) (*kcptc.Instance, error) {
+	return kcptc.Shared(ctx, "default", kcptc.Options{})
+}
+
+func KcpWithMigrations(ctx context.Context) (*kcptc.Instance, error) {
+	return kcptc.Shared(ctx, "second", kcptc.Options{
+		FeatureGates: []string{"LogicalClusterMigration"},
+	})
+}
+```
