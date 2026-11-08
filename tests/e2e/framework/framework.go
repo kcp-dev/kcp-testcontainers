@@ -25,12 +25,28 @@ import (
 	kcptc "github.com/kcp-dev/kcp-testcontainers"
 )
 
+// tag is the kcp release under test.
+var tag = cmp.Or(os.Getenv("KCP_VERSION"), kcptc.DefaultVersion)
+
 // Image is the image used by the e2e tests.
 //
 // The e2e tests run against different releases of kcp to ensure
 // backwards compatibility for a few versions.
 // In CI KCP_VERSION is set to the various supported releases.
-var Image = kcptc.DefaultImage + ":" + cmp.Or(os.Getenv("KCP_VERSION"), kcptc.DefaultVersion)
+var Image = kcptc.DefaultImage + ":" + tag
+
+// ver is the parsed KCP_VERSION.
+var ver = mustParseVersion(tag)
+
+// Before returns true when the given major/minor is before the tested kcp version.
+func Before(major, minor int) bool {
+	return ver.before(major, minor)
+}
+
+// After returns true when the given major/minor is after the tested kcp version.
+func After(major, minor int) bool {
+	return ver.after(major, minor)
+}
 
 // Default returns the instance all e2e tests share.
 func Default(ctx context.Context) (*kcptc.Instance, error) {
