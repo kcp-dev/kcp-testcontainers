@@ -36,19 +36,16 @@ func TestOptions_validate(t *testing.T) {
 			want: Options{
 				Image:          DefaultTag,
 				StartupTimeout: DefaultStartupTimeout,
-				Name:           DefaultName,
 			},
 		},
 		"explicit values kept": {
 			in: Options{
 				Image:          "example.com/kcp:dev",
 				StartupTimeout: time.Second,
-				Name:           "custom",
 			},
 			want: Options{
 				Image:          "example.com/kcp:dev",
 				StartupTimeout: time.Second,
-				Name:           "custom",
 			},
 		},
 	}

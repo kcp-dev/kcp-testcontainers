@@ -34,7 +34,7 @@ import (
 func TestNewSharded(t *testing.T) {
 	t.Parallel()
 
-	s, err := newSharded(&Options{})
+	s, err := newSharded(t.Name(), &Options{})
 	require.NoError(t, err)
 
 	assert.Equal(t, DefaultTag, s.opts.Image, "options must be validated")
@@ -44,7 +44,7 @@ func TestNewSharded(t *testing.T) {
 func TestSharded_requests(t *testing.T) {
 	t.Parallel()
 
-	s, err := newSharded(&Options{})
+	s, err := newSharded(t.Name(), &Options{})
 	require.NoError(t, err)
 
 	t.Run("cacheRequest", func(t *testing.T) {
@@ -111,7 +111,7 @@ func TestSharded_requests(t *testing.T) {
 func TestReadCredentials(t *testing.T) {
 	t.Parallel()
 
-	s, err := newSharded(&Options{})
+	s, err := newSharded(t.Name(), &Options{})
 	require.NoError(t, err)
 	req, err := s.frontProxyRequest()
 	require.NoError(t, err)

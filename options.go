@@ -32,9 +32,6 @@ const (
 
 	// DefaultStartupTimeout bounds waiting for the whole topology to become ready.
 	DefaultStartupTimeout = 2 * time.Minute
-
-	// DefaultName is the default instance name.
-	DefaultName = "default"
 )
 
 // Options configures the kcp topology.
@@ -47,13 +44,6 @@ type Options struct {
 	// StartupTimeout bounds waiting for all components to become ready.
 	// Defaults to [DefaultStartupTimeout].
 	StartupTimeout time.Duration
-
-	// Name identifies the instance.
-	// Used to distinguish instances when running multiple instances
-	// across multiple processes (e.g. during a `go test ./...` where
-	// multiple test packages utilize the same instances).
-	// Defaults to [DefaultName].
-	Name string
 
 	// FrontProxy is [testcontainers.ContainerCustomizer] applied to the front-proxy container after settings derived from the other options.
 	FrontProxy []testcontainers.ContainerCustomizer
@@ -68,9 +58,6 @@ type Options struct {
 func (o *Options) validate() error {
 	if o.Image == "" {
 		o.Image = DefaultTag
-	}
-	if o.Name == "" {
-		o.Name = DefaultName
 	}
 	if o.StartupTimeout == 0 {
 		o.StartupTimeout = DefaultStartupTimeout

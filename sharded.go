@@ -111,6 +111,8 @@ const (
 
 // sharded wires pki and Options into the topology and runs it.
 type sharded struct {
+	name string
+
 	pki  *pki
 	opts *Options
 
@@ -131,7 +133,7 @@ type sharded struct {
 }
 
 // newSharded creates the topology with a fresh pki.
-func newSharded(opts *Options) (*sharded, error) {
+func newSharded(name string, opts *Options) (*sharded, error) {
 	if err := opts.validate(); err != nil {
 		return nil, fmt.Errorf("invalid options: %w", err)
 	}
@@ -142,6 +144,7 @@ func newSharded(opts *Options) (*sharded, error) {
 	}
 
 	return &sharded{
+		name: name,
 		pki:  p,
 		opts: opts,
 	}, nil
@@ -341,7 +344,7 @@ func containerWithAlias(ctx context.Context, provider *testcontainers.DockerProv
 }
 
 func (s *sharded) containerName(component string) string {
-	return testcontainers.SessionID() + "-" + s.opts.Name + "-" + component
+	return testcontainers.SessionID() + "-" + s.name + "-" + component
 }
 
 // startContainer builds the request for alias, attaches it to a network, applies the customizers of alias and starts it.

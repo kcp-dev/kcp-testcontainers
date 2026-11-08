@@ -41,7 +41,6 @@ func TestCustomizers(t *testing.T) {
 	t.Log("Run a private kcp instance with container customizers")
 	instance, err := kcptc.Run(t.Context(), kcptc.Options{
 		Image:      framework.Image,
-		Name:       "customizers",
 		Cache:      label(kcptc.AliasCache),
 		FrontProxy: label(kcptc.AliasFrontProxy),
 		ShardA:     label(kcptc.ShardA),

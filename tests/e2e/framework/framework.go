@@ -34,15 +34,14 @@ var Image = kcptc.DefaultImage + ":" + cmp.Or(os.Getenv("KCP_VERSION"), kcptc.De
 
 // Default returns the instance all e2e tests share.
 func Default(ctx context.Context) (*kcptc.Instance, error) {
-	return kcptc.Run(ctx, kcptc.Options{
+	return kcptc.Shared(ctx, "default", kcptc.Options{
 		Image: Image,
 	})
 }
 
 // Second returns an instance independent of Default.
 func Second(ctx context.Context) (*kcptc.Instance, error) {
-	return kcptc.Run(ctx, kcptc.Options{
+	return kcptc.Shared(ctx, "second", kcptc.Options{
 		Image: Image,
-		Name:  "second",
 	})
 }

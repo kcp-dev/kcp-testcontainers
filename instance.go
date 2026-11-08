@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/testcontainers/testcontainers-go"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -53,9 +54,32 @@ type Instance struct {
 	shardAdmin keyPair
 }
 
-// Run starts a private sharded kcp instance.
+// Run starts a private kcp instance.
 func Run(ctx context.Context, opts Options) (*Instance, error) { //nolint:gocritic // Options by value mirrors testcontainers' request API
-	s, err := newSharded(&opts)
+	s, err := newSharded(uuid.NewString(), &opts)
+	if err != nil {
+		return nil, fmt.Errorf("creating instance: %w", err)
+	}
+	if err := s.start(ctx); err != nil {
+		return nil, fmt.Errorf("starting instance: %w", err)
+	}
+	return &Instance{
+		Cache:      s.cache,
+		FrontProxy: s.frontProxy,
+		ShardA:     s.shardA,
+		ShardB:     s.shardB,
+		base:       s.base,
+		shardAdmin: s.shardAdmin,
+	}, nil
+}
+
+// Shared starts a shared kcp instance.
+// Within a go test run instances are shared across processes via the name.
+//
+// If the passed options differ then the first process to create the
+// instance wins. There is no drift check.
+func Shared(ctx context.Context, name string, opts Options) (*Instance, error) { //nolint:gocritic // Options by value mirrors testcontainers' request API
+	s, err := newSharded(name, &opts)
 	if err != nil {
 		return nil, fmt.Errorf("creating instance: %w", err)
 	}
