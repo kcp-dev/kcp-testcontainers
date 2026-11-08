@@ -28,12 +28,13 @@ import (
 	kcptesting "github.com/kcp-dev/sdk/testing"
 
 	kcptc "github.com/kcp-dev/kcp-testcontainers"
+	"github.com/kcp-dev/kcp-testcontainers/tests/e2e/framework"
 )
 
 func TestWorkspacePinnedToShard(t *testing.T) {
 	t.Parallel()
 
-	instance, err := kcptc.Run(t.Context(), kcptc.Options{Image: image})
+	instance, err := framework.Default(t.Context())
 	require.NoError(t, err)
 
 	t.Logf("Create a workspace pinned to shard %q", kcptc.ShardB)
@@ -62,7 +63,7 @@ func TestWorkspacePinnedToShard(t *testing.T) {
 func TestWorkspaceNestedParents(t *testing.T) {
 	t.Parallel()
 
-	instance, err := kcptc.Run(t.Context(), kcptc.Options{Image: image})
+	instance, err := framework.Default(t.Context())
 	require.NoError(t, err)
 
 	t.Log("Create a workspace with parents")
@@ -86,7 +87,7 @@ func TestWorkspaceNestedParents(t *testing.T) {
 func TestWorkspaceGenerateName(t *testing.T) {
 	t.Parallel()
 
-	instance, err := kcptc.Run(t.Context(), kcptc.Options{Image: image})
+	instance, err := framework.Default(t.Context())
 	require.NoError(t, err)
 
 	t.Log("Create a workspace with a generate name")

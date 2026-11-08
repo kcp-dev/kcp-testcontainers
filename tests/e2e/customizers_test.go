@@ -24,6 +24,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 
 	kcptc "github.com/kcp-dev/kcp-testcontainers"
+	"github.com/kcp-dev/kcp-testcontainers/tests/e2e/framework"
 )
 
 const labelKey = "kcp-testcontainers.e2e/component"
@@ -39,7 +40,8 @@ func TestCustomizers(t *testing.T) {
 
 	t.Log("Run a private kcp instance with container customizers")
 	instance, err := kcptc.Run(t.Context(), kcptc.Options{
-		Image:      image,
+		Image:      framework.Image,
+		Name:       "customizers",
 		Cache:      label(kcptc.AliasCache),
 		FrontProxy: label(kcptc.AliasFrontProxy),
 		ShardA:     label(kcptc.ShardA),
