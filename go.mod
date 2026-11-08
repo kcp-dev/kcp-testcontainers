@@ -5,8 +5,11 @@ go 1.26.0
 tool github.com/ntnn/mdextract
 
 require (
+	github.com/google/uuid v1.6.0
 	github.com/kcp-dev/logicalcluster/v3 v3.0.5
 	github.com/kcp-dev/sdk v0.33.6
+	github.com/moby/moby/api v1.56.1
+	github.com/moby/moby/client v0.6.2
 	github.com/stretchr/testify v1.12.1
 	github.com/testcontainers/testcontainers-go v0.45.0
 	k8s.io/apiextensions-apiserver v0.37.0
@@ -59,7 +62,6 @@ require (
 	github.com/gomarkdown/markdown v0.0.0-20250810172220-2e2c11897d1a // indirect
 	github.com/google/gnostic-models v0.7.1 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/kcp-dev/apimachinery/v2 v2.33.6 // indirect
 	github.com/klauspost/compress v1.19.0 // indirect
@@ -67,8 +69,6 @@ require (
 	github.com/magiconair/properties v1.18.12 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/go-archive v0.3.3 // indirect
-	github.com/moby/moby/api v1.56.1 // indirect
-	github.com/moby/moby/client v0.6.2 // indirect
 	github.com/moby/patternmatcher v0.6.1 // indirect
 	github.com/moby/sys/sequential v0.7.0 // indirect
 	github.com/moby/sys/user v0.4.1 // indirect
