@@ -18,9 +18,11 @@ package e2e
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1alpha1 "github.com/kcp-dev/sdk/apis/core/v1alpha1"
@@ -46,18 +48,23 @@ func TestWorkspacePinnedToShard(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Logf("Check workspace is scheduled on shard %q", kcptc.ShardB)
-	ws := &tenancyv1alpha1.Workspace{}
-	require.NoError(t, root.Get(t.Context(), client.ObjectKey{Name: "pinned"}, ws))
-	assert.Equal(t,
-		kcptc.ShardB,
-		ws.Annotations[corev1alpha1.LogicalClusterShardAnnotationKey],
-		"workspace must be scheduled to %s", kcptc.ShardB,
-	)
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		ws := &tenancyv1alpha1.Workspace{}
+		require.NoError(c, root.Get(t.Context(), client.ObjectKey{Name: "pinned"}, ws))
+		assert.Equal(c,
+			kcptc.ShardB,
+			ws.Annotations[corev1alpha1.LogicalClusterShardAnnotationKey],
+			"workspace must be scheduled to %s", kcptc.ShardB,
+		)
+	}, wait.ForeverTestTimeout, 100*time.Millisecond)
 
 	t.Log("Access pinned workspace")
 	pinned, err := instance.Client(path.String(), client.Options{})
 	require.NoError(t, err)
-	require.NoError(t, pinned.List(t.Context(), &tenancyv1alpha1.WorkspaceList{}))
+
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		require.NoError(c, pinned.List(t.Context(), &tenancyv1alpha1.WorkspaceList{}))
+	}, wait.ForeverTestTimeout, 100*time.Millisecond)
 }
 
 func TestWorkspaceNestedParents(t *testing.T) {
@@ -79,8 +86,10 @@ func TestWorkspaceNestedParents(t *testing.T) {
 
 	t.Log("Verify the workspace exists")
 	workspaces := &tenancyv1alpha1.WorkspaceList{}
-	require.NoError(t, org.List(t.Context(), workspaces))
-	require.Len(t, workspaces.Items, 1)
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		require.NoError(c, org.List(t.Context(), workspaces))
+		assert.Len(c, workspaces.Items, 1)
+	}, wait.ForeverTestTimeout, 100*time.Millisecond)
 	assert.Equal(t, "team", workspaces.Items[0].Name)
 }
 
@@ -98,5 +107,7 @@ func TestWorkspaceGenerateName(t *testing.T) {
 	t.Logf("Access workspace with generate name %q", path)
 	cl, err := instance.Client(path.String(), client.Options{})
 	require.NoError(t, err)
-	require.NoError(t, cl.List(t.Context(), &tenancyv1alpha1.WorkspaceList{}), "generated workspace must be usable by returned path")
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		require.NoError(c, cl.List(t.Context(), &tenancyv1alpha1.WorkspaceList{}))
+	}, wait.ForeverTestTimeout, 100*time.Millisecond, "generated workspace must be usable by returned path")
 }

@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
 
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
 	apisv1alpha2 "github.com/kcp-dev/sdk/apis/apis/v1alpha2"
@@ -131,9 +132,24 @@ func TestAPIBindingAcrossShards(t *testing.T) {
 		assert.Equal(c, apisv1alpha2.APIBindingPhaseBound, current.Status.Phase)
 	}, bindTimeout, bindTick, "APIBinding must become bound")
 
+	t.Log("Wait for the bound API to be served in the consumer workspace")
+	sheriffGVK := schema.GroupVersionKind{Group: "wildwest.dev", Version: "v1alpha1", Kind: "Sheriff"}
+	consumerDiscovery, err := discovery.NewDiscoveryClientForConfig(instance.RESTConfig(consumerPath.String()))
+	require.NoError(t, err)
+
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		resources, err := consumerDiscovery.ServerResourcesForGroupVersion(sheriffGVK.GroupVersion().String())
+		require.NoError(c, err)
+		kinds := make([]string, 0, len(resources.APIResources))
+		for _, resource := range resources.APIResources {
+			kinds = append(kinds, resource.Kind)
+		}
+		assert.Contains(c, kinds, sheriffGVK.Kind)
+	}, bindTimeout, bindTick, "bound API must appear in discovery")
+
 	t.Log("Create a Sheriff in the consumer worksapce")
 	sheriff := &unstructured.Unstructured{}
-	sheriff.SetGroupVersionKind(schema.GroupVersionKind{Group: "wildwest.dev", Version: "v1alpha1", Kind: "Sheriff"})
+	sheriff.SetGroupVersionKind(sheriffGVK)
 	sheriff.SetName("woody")
 	require.NoError(t, consumer.Create(t.Context(), sheriff))
 
