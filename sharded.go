@@ -340,6 +340,10 @@ func containerWithAlias(ctx context.Context, provider *testcontainers.DockerProv
 	return ctr, nil
 }
 
+func (s *sharded) containerName(component string) string {
+	return testcontainers.SessionID() + "-" + s.opts.Name + "-" + component
+}
+
 // startContainer builds the request for alias, attaches it to a network, applies the customizers of alias and starts it.
 func (s *sharded) startContainer(ctx context.Context, alias string, build func() (*testcontainers.GenericContainerRequest, error), network testcontainers.CustomizeRequestOption) (testcontainers.Container, error) {
 	req, err := build()
@@ -350,6 +354,7 @@ func (s *sharded) startContainer(ctx context.Context, alias string, build func()
 	if err := network.Customize(req); err != nil {
 		return nil, fmt.Errorf("attaching %s to network: %w", alias, err)
 	}
+	req.Name = s.containerName(alias)
 	req.Started = true
 	for _, customizer := range s.opts.customizers(alias) {
 		if err := customizer.Customize(req); err != nil {
