@@ -49,6 +49,10 @@ path, err = instance.CreateWorkspace(ctx, "root:test-")
 cfg := instance.RESTConfig("root:my:workspace")
 // controller-runtime client for a workspace
 cl, err := instance.Client("root:my:workspace", client.Options{})
+// rest.Config not scoped to a workspace, e.g. for a virtual workspace URL
+// (every serving certificate is valid for the Docker host the ports are
+// published on, so no TLS overrides are needed)
+cfg = instance.BaseConfig()
 ```
 
 <!--

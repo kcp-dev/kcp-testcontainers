@@ -123,6 +123,11 @@ type sharded struct {
 	// shardAdmin is the system:masters client certificate for direct shard access.
 	shardAdmin keyPair
 
+	// host is the address under which the Docker daemon publishes
+	// container ports; it is a SAN of every serving certificate so
+	// clients verify against the URL they dial.
+	host string
+
 	// network is the name of the network the cache-server was created with.
 	network    string
 	cache      testcontainers.Container
@@ -153,6 +158,11 @@ func newSharded(name string, opts *Options) (*sharded, error) {
 
 func (s *sharded) start(ctx context.Context) error {
 	var err error
+
+	s.host, err = daemonHost(ctx)
+	if err != nil {
+		return err
+	}
 
 	// To allow multiple processes to start the same instance the
 	// cache-server is created first with [tcnetwork.WithNewNetwork],
@@ -212,6 +222,21 @@ func (s *sharded) start(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// daemonHost returns the host under which the Docker daemon publishes container ports.
+func daemonHost(ctx context.Context) (string, error) {
+	provider, err := testcontainers.NewDockerProvider()
+	if err != nil {
+		return "", fmt.Errorf("creating docker provider: %w", err)
+	}
+	defer provider.Close()
+
+	host, err := provider.DaemonHost(ctx)
+	if err != nil {
+		return "", fmt.Errorf("resolving docker host: %w", err)
+	}
+	return host, nil
 }
 
 // ownsInstance reports whether the cache-server was created by this process.
@@ -415,10 +440,9 @@ func (s *sharded) loadCredentials(ctx context.Context) error {
 	s.base = &rest.Config{
 		Host: "https://" + address,
 		TLSClientConfig: rest.TLSClientConfig{
-			ServerName: AliasFrontProxy,
-			CAData:     credentials.ca,
-			CertData:   credentials.admin.cert,
-			KeyData:    credentials.admin.key,
+			CAData:   credentials.ca,
+			CertData: credentials.admin.cert,
+			KeyData:  credentials.admin.key,
 		},
 	}
 	s.admin = credentials.admin
@@ -519,7 +543,7 @@ func (s *sharded) featureGateArgs() []string {
 
 // frontProxyRequest builds the kcp-front-proxy container request.
 func (s *sharded) frontProxyRequest() (*testcontainers.GenericContainerRequest, error) {
-	serving, err := s.pki.serverCert(AliasFrontProxy, "localhost")
+	serving, err := s.pki.serverCert(AliasFrontProxy, "localhost", s.host)
 	if err != nil {
 		return nil, err
 	}
@@ -598,7 +622,7 @@ func (s *sharded) frontProxyRequest() (*testcontainers.GenericContainerRequest, 
 //
 // TODO(ntnn): ShardA is implicitly the root shard.
 func (s *sharded) shardRequest(alias string) (*testcontainers.GenericContainerRequest, error) {
-	serving, err := s.pki.serverCert(alias, "localhost")
+	serving, err := s.pki.serverCert(alias, "localhost", s.host)
 	if err != nil {
 		return nil, err
 	}
@@ -709,7 +733,7 @@ func (s *sharded) shardRequest(alias string) (*testcontainers.GenericContainerRe
 
 // cacheRequest builds the cache-server container request.
 func (s *sharded) cacheRequest() (*testcontainers.GenericContainerRequest, error) {
-	serving, err := s.pki.serverCert(AliasCache, "localhost")
+	serving, err := s.pki.serverCert(AliasCache, "localhost", s.host)
 	if err != nil {
 		return nil, err
 	}
