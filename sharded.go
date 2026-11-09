@@ -255,7 +255,10 @@ func (s *sharded) startComponents(ctx context.Context) error {
 // joinComponents waits for the process owning the instance to start
 // the shards and the front-proxy and for the front-proxy to become ready.
 func (s *sharded) joinComponents(ctx context.Context) error {
-	joinCtx, cancel := context.WithTimeout(ctx, s.opts.StartupTimeout)
+	// During startup each component has a timeout of
+	// s.opts.StartupTimeout, so the join timeout is the cumulative
+	// value to match.
+	joinCtx, cancel := context.WithTimeout(ctx, s.opts.StartupTimeout*4)
 	defer cancel()
 
 	provider, err := testcontainers.NewDockerProvider()
