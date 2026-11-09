@@ -101,6 +101,14 @@ func (in *Instance) Config() *rest.Config {
 	return in.RESTConfig(ShardA)
 }
 
+// BaseConfig returns an admin rest.Config through the front-proxy that is
+// not scoped to a workspace, for clients that append /clusters/<path>
+// themselves or that are pointed at a URL kcp advertises, such as a
+// virtual workspace URL from an APIExportEndpointSlice.
+func (in *Instance) BaseConfig() *rest.Config {
+	return rest.CopyConfig(in.base)
+}
+
 // RESTConfig returns an admin rest.Config for the workspace at path
 // through the front-proxy.
 func (in *Instance) RESTConfig(path string) *rest.Config {
@@ -244,7 +252,6 @@ func (in *Instance) externalConfig(ctx context.Context, container testcontainers
 
 	cfg := rest.CopyConfig(in.base)
 	cfg.Host = "https://" + address
-	cfg.ServerName = alias
 	cfg.CertData = clientCert.cert
 	cfg.KeyData = clientCert.key
 	return cfg, nil

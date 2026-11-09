@@ -166,12 +166,8 @@ func TestAPIBindingAcrossShards(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("virtual workspace %s mapped to %s", vwURL, external)
 
-	config := instance.Config()
+	config := instance.BaseConfig()
 	config.Host = external + "/clusters/*"
-	// the VW is served by a shard whose certificate names the shard, not the front-proxy.
-	config.TLSClientConfig.ServerName = ""
-	config.TLSClientConfig.Insecure = true
-	config.TLSClientConfig.CAData = nil
 	vw, err := client.New(config, client.Options{})
 	require.NoError(t, err)
 

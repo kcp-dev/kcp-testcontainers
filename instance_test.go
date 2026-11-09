@@ -36,22 +36,26 @@ func TestInstance_RESTConfig(t *testing.T) {
 		base: &rest.Config{
 			Host: "https://localhost:12345",
 			TLSClientConfig: rest.TLSClientConfig{
-				ServerName: AliasFrontProxy,
-				CAData:     []byte("ca"),
-				CertData:   []byte("cert"),
-				KeyData:    []byte("key"),
+				CAData:   []byte("ca"),
+				CertData: []byte("cert"),
+				KeyData:  []byte("key"),
 			},
 		},
 	}
 
 	cfg := in.RESTConfig("root:my:workspace")
 	assert.Equal(t, "https://localhost:12345/clusters/root:my:workspace", cfg.Host)
-	assert.Equal(t, AliasFrontProxy, cfg.ServerName, "TLS settings must be carried over")
 	assert.Equal(t, in.base.TLSClientConfig, cfg.TLSClientConfig, "client credentials must be carried over")
 	cfg.Host = "https://changed.example"
 	assert.Equal(t, "https://localhost:12345", in.base.Host, "base must not be mutated")
 
 	assert.Equal(t, "https://localhost:12345/clusters/root", in.Config().Host)
+
+	base := in.BaseConfig()
+	assert.Equal(t, "https://localhost:12345", base.Host, "BaseConfig must not be scoped")
+	assert.Equal(t, in.base.TLSClientConfig, base.TLSClientConfig, "client credentials must be carried over")
+	base.Host = "https://changed.example"
+	assert.Equal(t, "https://localhost:12345", in.base.Host, "base must not be mutated")
 }
 
 func TestInstance_Client(t *testing.T) {
