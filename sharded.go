@@ -23,10 +23,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	mobycontainer "github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 	"github.com/testcontainers/testcontainers-go"
@@ -179,7 +181,7 @@ func (s *sharded) start(ctx context.Context) error {
 	// The other processes wait until the front-proxy is ready and then
 	// loading the client information from the front-proxy.
 
-	s.cache, err = s.startContainer(ctx, AliasCache, s.cacheRequest, tcnetwork.WithNewNetwork(ctx, []string{AliasCache}))
+	s.cache, err = s.startCache(ctx)
 	if err != nil {
 		return err
 	}
@@ -237,6 +239,41 @@ func daemonHost(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("resolving docker host: %w", err)
 	}
 	return host, nil
+}
+
+// startCache starts the cache-server or attaches to it if it is already being created/running.
+func (s *sharded) startCache(ctx context.Context) (testcontainers.Container, error) {
+	ctr, err := s.startContainer(ctx, AliasCache, s.cacheRequest, tcnetwork.WithNewNetwork(ctx, []string{AliasCache}))
+	if err == nil {
+		return ctr, nil
+	}
+	if !cerrdefs.IsConflict(err) {
+		return ctr, err
+	}
+	return s.attachCache(ctx)
+}
+
+// attachCache waits for the cache-server created by another process to run and become ready.
+func (s *sharded) attachCache(ctx context.Context) (testcontainers.Container, error) {
+	attachCtx, cancel := context.WithTimeout(ctx, s.opts.StartupTimeout)
+	defer cancel()
+
+	provider, err := testcontainers.NewDockerProvider()
+	if err != nil {
+		return nil, fmt.Errorf("creating docker provider: %w", err)
+	}
+	defer provider.Close()
+
+	ctr, err := runningContainerWithName(attachCtx, provider, s.containerName(AliasCache))
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.waitReadyz(portCache).WaitUntilReady(attachCtx, ctr); err != nil {
+		return ctr, fmt.Errorf("waiting for %s to be ready: %w", AliasCache, err)
+	}
+
+	return ctr, nil
 }
 
 // ownsInstance reports whether the cache-server was created by this process.
@@ -368,6 +405,43 @@ func containerWithAlias(ctx context.Context, provider *testcontainers.DockerProv
 	ctr, err := provider.ContainerFromType(ctx, found)
 	if err != nil {
 		return nil, fmt.Errorf("loading %s: %w", alias, err)
+	}
+	return ctr, nil
+}
+
+// runningContainerWithName polls until the container called name is running.
+// Fails early when the container exited instead of waiting for the timeout.
+func runningContainerWithName(ctx context.Context, provider *testcontainers.DockerProvider, name string) (testcontainers.Container, error) {
+	var found mobycontainer.Summary
+	if err := wait.PollUntilContextCancel(ctx, containerPollInterval, true,
+		func(ctx context.Context) (bool, error) {
+			list, err := provider.Client().ContainerList(ctx, client.ContainerListOptions{
+				All:     true,
+				Filters: make(client.Filters).Add("name", "^"+regexp.QuoteMeta(name)+"$"),
+			})
+			if err != nil {
+				return false, fmt.Errorf("listing containers named %s: %w", name, err)
+			}
+			for i := range list.Items {
+				switch list.Items[i].State {
+				case mobycontainer.StateRunning:
+					found = list.Items[i]
+					return true, nil
+				case mobycontainer.StateExited, mobycontainer.StateDead:
+					return false, fmt.Errorf("container %s is %s", name, list.Items[i].State)
+				default:
+					continue
+				}
+			}
+			return false, nil
+		},
+	); err != nil {
+		return nil, fmt.Errorf("waiting for %s to run: %w", name, err)
+	}
+
+	ctr, err := provider.ContainerFromType(ctx, found)
+	if err != nil {
+		return nil, fmt.Errorf("loading %s: %w", name, err)
 	}
 	return ctr, nil
 }
@@ -739,7 +813,6 @@ func (s *sharded) cacheRequest() (*testcontainers.GenericContainerRequest, error
 	}
 
 	return &testcontainers.GenericContainerRequest{
-		Reuse: true,
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:      s.opts.Image,
 			Entrypoint: []string{"/cache-server"},
