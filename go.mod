@@ -5,6 +5,7 @@ go 1.26.0
 tool github.com/ntnn/mdextract
 
 require (
+	github.com/containerd/errdefs v1.0.0
 	github.com/google/uuid v1.6.0
 	github.com/kcp-dev/apimachinery/v2 v2.33.6
 	github.com/kcp-dev/logicalcluster/v3 v3.0.5
@@ -28,7 +29,6 @@ require (
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/containerd/errdefs v1.0.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/containerd/log v0.1.0 // indirect
 	github.com/containerd/platforms v0.2.1 // indirect
