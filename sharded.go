@@ -81,8 +81,9 @@ const (
 	rootDirectory = "/.kcp"
 
 	// pkiDir is the root dir for all x509-related files in the container.
-	pkiDir = "/.kcp-pki"
-	caPath = pkiDir + "/ca.crt"
+	pkiDir              = "/.kcp-pki"
+	caPath              = pkiDir + "/ca.crt"
+	requestHeaderCAPath = pkiDir + "/requestheader-ca.crt"
 
 	// The admin credentials for other processes to read when sharing an instance.
 	adminCertPath      = pkiDir + "/admin.crt"
@@ -167,10 +168,9 @@ func (s *sharded) start(ctx context.Context) error {
 	}
 
 	// To allow multiple processes to start the same instance the
-	// cache-server is created first with [tcnetwork.WithNewNetwork],
-	// which creates a new network with a random name, and
-	// [testcontainers.WithReuseByName], which leads to a container with
-	// the same name only being created once.
+	// cache-server is created first on a new network with a random name,
+	// with [testcontainers.WithReuseByName], which leads to a container
+	// with the same name only being created once.
 	//
 	// When multiple processes try to create this container
 	// testcontainers only allows one of them to do so.
@@ -243,10 +243,18 @@ func daemonHost(ctx context.Context) (string, error) {
 
 // startCache starts the cache-server or attaches to it if it is already being created/running.
 func (s *sharded) startCache(ctx context.Context) (testcontainers.Container, error) {
-	ctr, err := s.startContainer(ctx, AliasCache, s.cacheRequest, tcnetwork.WithNewNetwork(ctx, []string{AliasCache}))
+	nw, err := tcnetwork.New(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("creating network: %w", err)
+	}
+
+	ctr, err := s.startContainer(ctx, AliasCache, s.cacheRequest, tcnetwork.WithNetwork([]string{AliasCache}, nw))
 	if err == nil {
 		return ctr, nil
 	}
+	// The cache-server was not created on the network: it would
+	// otherwise leak until the session ends, one per joining call.
+	_ = nw.Remove(ctx)
 	if !cerrdefs.IsConflict(err) {
 		return ctr, err
 	}
@@ -622,7 +630,7 @@ func (s *sharded) frontProxyRequest() (*testcontainers.GenericContainerRequest, 
 		return nil, err
 	}
 
-	requestHeaderClient, err := s.pki.clientCert("kcp-front-proxy")
+	requestHeaderClient, err := s.pki.requestHeaderClientCert("kcp-front-proxy")
 	if err != nil {
 		return nil, err
 	}
@@ -746,7 +754,7 @@ func (s *sharded) shardRequest(alias string) (*testcontainers.GenericContainerRe
 		"--shard-external-url=" + inNetworkURL(AliasFrontProxy, portFrontProxy),
 		"--external-hostname=" + AliasFrontProxy,
 		"--client-ca-file=" + caPath,
-		"--requestheader-client-ca-file=" + caPath,
+		"--requestheader-client-ca-file=" + requestHeaderCAPath,
 		"--requestheader-allowed-names=kcp-front-proxy",
 		"--requestheader-username-headers=X-Remote-User",
 		"--requestheader-group-headers=X-Remote-Group",
@@ -767,6 +775,7 @@ func (s *sharded) shardRequest(alias string) (*testcontainers.GenericContainerRe
 
 	files := []testcontainers.ContainerFile{
 		file(caPath, s.pki.caPEM),
+		file(requestHeaderCAPath, s.pki.requestHeaderCAPEM),
 		file(serviceAccountCertPath, s.pki.serviceAccount.cert),
 		file(serviceAccountKeyPath, s.pki.serviceAccount.key),
 		file(servingCertPath, serving.cert),

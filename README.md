@@ -28,6 +28,8 @@ package kcptc_test
 import  (
 	"context"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"github.com/kcp-dev/logicalcluster/v3"
+	kcptesting "github.com/kcp-dev/sdk/testing"
 	kcptc "github.com/kcp-dev/kcp-testcontainers"
 )
 
@@ -44,6 +46,12 @@ instance, err := kcptc.Run(ctx, kcptc.Options{})
 path, err := instance.CreateWorkspace(ctx, "root:my:workspace")
 // create workspace with generated name (parents included)
 path, err = instance.CreateWorkspace(ctx, "root:test-")
+// kcp's workspace options apply to the last workspace in the path; wait until
+// the front-proxy serves every workspace in the path, not only until Ready
+path, err = instance.CreateWorkspace(ctx, "root:org:team",
+	kcptc.With(kcptesting.WithType(logicalcluster.NewPath("root"), "organization")),
+	kcptc.WaitForReachable(),
+)
 
 // rest.Config for a workspace
 cfg := instance.RESTConfig("root:my:workspace")
