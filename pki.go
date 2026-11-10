@@ -29,8 +29,9 @@ import (
 )
 
 const (
-	caName             = "kcp-ca"
-	serviceAccountName = "kcp-service-account-signing-key"
+	caName              = "kcp-ca"
+	requestHeaderCAName = "kcp-front-proxy-requestheader-ca"
+	serviceAccountName  = "kcp-service-account-signing-key"
 
 	// 365 days, more than enough for a short-live test instance.
 	certLifetimeDays = 365
@@ -44,21 +45,30 @@ type keyPair struct {
 
 // pki is a CA used to sign every serving and client certificate of
 // a kcptc instance and the service account signing key of all shards.
+//
+// The front-proxy's request-header client certificate is signed by a
+// CA of its own: the shards trust it only for the X-Remote-* headers.
+// Were it signed by the client CA, a request the front-proxy passes
+// through unauthenticated (e.g. with a service account token) would
+// be authenticated by the shard as the front-proxy itself.
 type pki struct {
 	ca    *crypto.CA
 	caPEM []byte
+
+	requestHeaderCA    *crypto.CA
+	requestHeaderCAPEM []byte
 
 	serviceAccount keyPair
 }
 
 func newPKI() (*pki, error) {
-	cfg, err := crypto.MakeSelfSignedCAConfig(caName, certLifetimeDays)
+	ca, caPEM, err := newCA(caName)
 	if err != nil {
-		return nil, fmt.Errorf("creating CA: %w", err)
+		return nil, err
 	}
-	certPEM, _, err := cfg.GetPEMBytes()
+	requestHeaderCA, requestHeaderCAPEM, err := newCA(requestHeaderCAName)
 	if err != nil {
-		return nil, fmt.Errorf("encoding CA: %w", err)
+		return nil, err
 	}
 
 	serviceAccount, err := selfSignedKeyPair(serviceAccountName)
@@ -67,13 +77,27 @@ func newPKI() (*pki, error) {
 	}
 
 	return &pki{
-		ca: &crypto.CA{
-			Config:          cfg,
-			SerialGenerator: &crypto.RandomSerialGenerator{},
-		},
-		caPEM:          certPEM,
-		serviceAccount: serviceAccount,
+		ca:                 ca,
+		caPEM:              caPEM,
+		requestHeaderCA:    requestHeaderCA,
+		requestHeaderCAPEM: requestHeaderCAPEM,
+		serviceAccount:     serviceAccount,
 	}, nil
+}
+
+func newCA(name string) (*crypto.CA, []byte, error) {
+	cfg, err := crypto.MakeSelfSignedCAConfig(name, certLifetimeDays)
+	if err != nil {
+		return nil, nil, fmt.Errorf("creating CA %q: %w", name, err)
+	}
+	certPEM, _, err := cfg.GetPEMBytes()
+	if err != nil {
+		return nil, nil, fmt.Errorf("encoding CA %q: %w", name, err)
+	}
+	return &crypto.CA{
+		Config:          cfg,
+		SerialGenerator: &crypto.RandomSerialGenerator{},
+	}, certPEM, nil
 }
 
 // serverCert issues a serving certificate with hostnames as SANs.
@@ -81,6 +105,16 @@ func (p *pki) serverCert(hostnames ...string) (keyPair, error) {
 	cfg, err := p.ca.MakeServerCertForDuration(sets.New(hostnames...), certLifetime)
 	if err != nil {
 		return keyPair{}, fmt.Errorf("creating serving certificate for %v: %w", hostnames, err)
+	}
+	return toKeyPair(cfg)
+}
+
+// requestHeaderClientCert issues the front-proxy's client certificate
+// for the request-header authentication of the shards.
+func (p *pki) requestHeaderClientCert(name string) (keyPair, error) {
+	cfg, err := p.requestHeaderCA.MakeClientCertificateForDuration(&user.DefaultInfo{Name: name}, certLifetime)
+	if err != nil {
+		return keyPair{}, fmt.Errorf("creating request-header client certificate %q: %w", name, err)
 	}
 	return toKeyPair(cfg)
 }

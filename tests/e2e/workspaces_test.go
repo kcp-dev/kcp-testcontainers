@@ -42,7 +42,7 @@ func TestWorkspacePinnedToShard(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Logf("Create a workspace pinned to shard %q", kcptc.ShardB)
-	path, err := instance.CreateWorkspace(t.Context(), "root:pinned", kcptesting.WithShard(kcptc.ShardB))
+	path, err := instance.CreateWorkspace(t.Context(), "root:pinned", kcptc.With(kcptesting.WithShard(kcptc.ShardB)))
 	require.NoError(t, err)
 	assert.Equal(t, "root:pinned", path.String())
 
@@ -120,4 +120,22 @@ func TestWorkspaceGenerateName(t *testing.T) {
 	require.EventuallyWithT(t, func(c *assert.CollectT) {
 		require.NoError(c, cl.List(t.Context(), &tenancyv1alpha1.WorkspaceList{}))
 	}, wait.ForeverTestTimeout, 100*time.Millisecond, "generated workspace must be usable by returned path")
+}
+
+func TestWorkspaceWaitForReachable(t *testing.T) {
+	t.Parallel()
+
+	instance, err := framework.Default(t.Context())
+	require.NoError(t, err)
+
+	t.Log("Create a workspace with parents and wait for the front-proxy to serve them")
+	path, err := instance.CreateWorkspace(t.Context(), "root:reachable:child-", kcptc.WaitForReachable())
+	require.NoError(t, err)
+
+	t.Logf("Access %q and its parent without retrying", path)
+	for _, p := range []string{path.String(), "root:reachable"} {
+		cl, err := instance.Client(p, client.Options{})
+		require.NoError(t, err)
+		require.NoError(t, cl.List(t.Context(), &tenancyv1alpha1.WorkspaceList{}), "workspace %s must be served through the front-proxy on return", p)
+	}
 }

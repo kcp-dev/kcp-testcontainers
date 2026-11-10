@@ -179,11 +179,38 @@ func (in *Instance) ExternalURL(ctx context.Context, inNetwork string) (string, 
 	return u.String(), nil
 }
 
+// WorkspaceOption configures CreateWorkspace.
+type WorkspaceOption func(*workspaceRequest)
+
+type workspaceRequest struct {
+	// opts apply to the last workspace in the path.
+	opts []kcptesting.UnprivilegedWorkspaceOption
+	// reachable waits for every workspace in the path to be served through
+	// the front-proxy.
+	reachable bool
+}
+
+// With applies kcp's workspace options (type, name, shard, ...) to the last
+// workspace in the path.
+func With(opts ...kcptesting.UnprivilegedWorkspaceOption) WorkspaceOption {
+	return func(req *workspaceRequest) {
+		req.opts = append(req.opts, opts...)
+	}
+}
+
+// WaitForReachable makes CreateWorkspace wait until every workspace in the
+// path is served through the front-proxy, not only Ready. Requests to a Ready
+// workspace fail until the front-proxy has picked up its logical cluster.
+func WaitForReachable() WorkspaceOption {
+	return func(req *workspaceRequest) {
+		req.reachable = true
+	}
+}
+
 // CreateWorkspace creates the workspace at path, including missing parents.
 // A path segment ending in "-" is used as a GenerateName prefix.
 // The full path with generated names is returned.
-// Options apply only to the last workspace in the path.
-func (in *Instance) CreateWorkspace(ctx context.Context, path string, opts ...kcptesting.UnprivilegedWorkspaceOption) (logicalcluster.Path, error) {
+func (in *Instance) CreateWorkspace(ctx context.Context, path string, opts ...WorkspaceOption) (logicalcluster.Path, error) {
 	segments := strings.Split(path, ":")
 	if segments[0] != ShardA {
 		return logicalcluster.Path{}, fmt.Errorf("workspace path %q must start with %s", path, ShardA)
@@ -192,13 +219,18 @@ func (in *Instance) CreateWorkspace(ctx context.Context, path string, opts ...kc
 		return logicalcluster.Path{}, fmt.Errorf("workspace path %q names no workspace to create", path)
 	}
 
+	req := &workspaceRequest{}
+	for _, opt := range opts {
+		opt(req)
+	}
+
 	parent := logicalcluster.NewPath(segments[0])
 	for i, segment := range segments[1:] {
 		var segmentOpts []kcptesting.UnprivilegedWorkspaceOption
 		if i == len(segments)-2 {
-			segmentOpts = opts
+			segmentOpts = req.opts
 		}
-		name, err := in.createChildWorkspace(ctx, parent, segment, segmentOpts...)
+		name, err := in.createChildWorkspace(ctx, parent, segment, req.reachable, segmentOpts...)
 		if err != nil {
 			return logicalcluster.Path{}, fmt.Errorf("creating workspace %q in %s: %w", segment, parent, err)
 		}
@@ -207,7 +239,7 @@ func (in *Instance) CreateWorkspace(ctx context.Context, path string, opts ...kc
 	return parent, nil
 }
 
-func (in *Instance) createChildWorkspace(ctx context.Context, parent logicalcluster.Path, name string, opts ...kcptesting.UnprivilegedWorkspaceOption) (string, error) {
+func (in *Instance) createChildWorkspace(ctx context.Context, parent logicalcluster.Path, name string, reachable bool, opts ...kcptesting.UnprivilegedWorkspaceOption) (string, error) {
 	cl, err := in.Client(parent.String(), client.Options{})
 	if err != nil {
 		return "", err
@@ -239,7 +271,25 @@ func (in *Instance) createChildWorkspace(ctx context.Context, parent logicalclus
 		return "", fmt.Errorf("waiting for workspace %q to become ready: %w", ws.Name, err)
 	}
 
-	// TODO(ntnn): wait until lc is accessible through front-proxy
+	if !reachable {
+		return ws.Name, nil
+	}
+
+	// wait until the front-proxy serves the logical cluster
+	path := parent.Join(ws.Name)
+	wscl, err := in.Client(path.String(), client.Options{})
+	if err != nil {
+		return "", err
+	}
+	var lastErr error
+	if err := wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, time.Minute, true,
+		func(ctx context.Context) (bool, error) {
+			lastErr = wscl.Get(ctx, client.ObjectKey{Name: corev1alpha1.LogicalClusterName}, &corev1alpha1.LogicalCluster{})
+			return lastErr == nil, nil
+		},
+	); err != nil {
+		return "", fmt.Errorf("waiting for workspace %s to be reachable through the front-proxy: %w (last error: %w)", path, err, lastErr)
+	}
 
 	return ws.Name, nil
 }

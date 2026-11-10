@@ -62,13 +62,13 @@ func TestAPIBindingAcrossShards(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Logf("Create a provider workspace on shard %q", kcptc.ShardA)
-	providerPath, err := instance.CreateWorkspace(t.Context(), "root:provider", kcptesting.WithShard(kcptc.ShardA))
+	providerPath, err := instance.CreateWorkspace(t.Context(), "root:provider", kcptc.With(kcptesting.WithShard(kcptc.ShardA)))
 	require.NoError(t, err)
 	provider, err := instance.Client(providerPath.String(), client.Options{})
 	require.NoError(t, err)
 
 	t.Logf("Create a consumer workspace on shard %q", kcptc.ShardB)
-	consumerPath, err := instance.CreateWorkspace(t.Context(), "root:consumer", kcptesting.WithShard(kcptc.ShardB))
+	consumerPath, err := instance.CreateWorkspace(t.Context(), "root:consumer", kcptc.With(kcptesting.WithShard(kcptc.ShardB)))
 	require.NoError(t, err)
 	consumer, err := instance.Client(consumerPath.String(), client.Options{})
 	require.NoError(t, err)
